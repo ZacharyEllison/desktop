@@ -1,0 +1,4 @@
+# src/zen/tests/livefolders/moz.build
+XPCSHELL_TESTS_MANIFESTS += [
+    "xpcshell.ini",
+]

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8"/>
+  <title>Live Folder</title>
+  <!-- The stylesheet will be created in the next step -->
+  <link rel="stylesheet" href="chrome://browser/content/zen/livefolders/live-folder-styles.css"/>
+  <script type="module">
+    // Accessing chrome resources like gZenLiveFolderManager from a chrome:// page's content script.
+    // This typically works because they share the same chrome privileges.
+    const ZLFM = window.opener?.gZenLiveFolderManager || window.parent?.gZenLiveFolderManager || (typeof gZenLiveFolderManager !== 'undefined' ? gZenLiveFolderManager : null);
+
+    const params = new URLSearchParams(window.location.search);
+    const folderUuid = params.get('uuid');
+    const folderTitle = params.get('title') || 'Live Folder Items';
+    document.title = folderTitle;
+
+    const itemContainer = document.getElementById('itemContainer');
+    const folderHeader = document.getElementById('folderHeader');
+    // Ensure elements exist before setting textContent
+    if (folderHeader) folderHeader.textContent = folderTitle;
+
+    function getStatusIndicatorClass(status) {
+        switch (status ? status.toLowerCase() : '') {
+            case 'open': return 'status-open';
+            case 'merged': return 'status-merged';
+            case 'closed': return 'status-closed';
+            default: return 'status-unknown';
+        }
+    }
+
+    async function renderItems() {
+      if (!itemContainer) return; // Ensure container exists
+
+      if (!ZLFM) {
+        itemContainer.innerHTML = '<p>Error: Live Folder Manager not accessible. Ensure gZenLiveFolderManager is global or passed correctly.</p>';
+        return;
+      }
+      if (!folderUuid) {
+        itemContainer.innerHTML = '<p>Error: Folder UUID not provided in URL.</p>';
+        return;
+      }
+
+      itemContainer.innerHTML = '<p>Loading items...</p>';
+      try {
+        const items = await ZLFM.getLiveFolderItemsForDisplay(folderUuid);
+        itemContainer.innerHTML = ''; // Clear loading message
+
+        if (!items || items.length === 0) {
+          itemContainer.innerHTML = '<p>No items to display.</p>';
+          return;
+        }
+
+        const ul = document.createElement('ul');
+        items.forEach(item => {
+          const li = document.createElement('li');
+          li.className = 'live-folder-item';
+
+          const indicator = document.createElement('span');
+          indicator.className = \`status-indicator \${getStatusIndicatorClass(item.status)}\`;
+          li.appendChild(indicator);
+
+          const titleLink = document.createElement('a');
+          titleLink.href = item.link;
+          titleLink.textContent = item.title;
+          titleLink.target = '_blank';
+
+          // Correctly open links in a new browser tab from chrome context
+          titleLink.addEventListener('click', (e) => {
+            e.preventDefault(); // Prevent default navigation within the about page
+            if (window.opener && window.opener.gBrowser && window.opener.gBrowser.addTrustedTab) {
+                window.opener.gBrowser.addTrustedTab(item.link, { relatedToCurrent: true });
+            } else if (globalThis.gBrowser && globalThis.gBrowser.addTrustedTab) {
+                globalThis.gBrowser.addTrustedTab(item.link, { relatedToCurrent: true });
+            } else {
+                // Fallback if gBrowser is not accessible
+                console.warn("Could not open tab via gBrowser. Standard link behavior will apply.");
+                window.open(item.link, '_blank');
+            }
+          });
+          li.appendChild(titleLink);
+          ul.appendChild(li);
+        });
+        itemContainer.appendChild(ul);
+      } catch (e) {
+        itemContainer.innerHTML = \`<p>Error loading items: \${e.message}</p>\`;
+        console.error("Error rendering live folder items:", e);
+      }
+    }
+
+    function handleLiveFolderUpdate(subject, topic, data) {
+        // Note: Observer function signature is (subject, topic, data)
+        // The 'subject' here is the nsISupportsString containing the UUID.
+        const updatedUuid = subject.data ? subject.data : subject; // subject can be nsISupportsString or string
+        if (updatedUuid === folderUuid) {
+            console.log(\`Live folder \${folderUuid} updated (event received), refreshing display.\`);
+            renderItems();
+        }
+    }
+
+    // Wait for the DOM to be fully loaded before trying to access elements
+    document.addEventListener('DOMContentLoaded', () => {
+        // Re-assign elements in case script runs before DOM is ready
+        const currentItemContainer = document.getElementById('itemContainer');
+        const currentFolderHeader = document.getElementById('folderHeader');
+        if (currentFolderHeader) currentFolderHeader.textContent = folderTitle; // Set title once DOM is ready
+
+        if (ZLFM && folderUuid && currentItemContainer) {
+          renderItems();
+          // Observer setup
+          const obs = window.opener?.Services?.obs || globalThis.Services?.obs;
+          if (obs) {
+              obs.addObserver(handleLiveFolderUpdate, 'zen-live-folder-updated');
+              window.addEventListener('pagehide', () => {
+                  obs.removeObserver(handleLiveFolderUpdate, 'zen-live-folder-updated');
+              }, {once: true});
+              console.log(\`Observer for 'zen-live-folder-updated' on \${folderUuid} added.\`);
+          } else {
+              console.warn("Services.obs not available. Cannot listen for live folder updates.");
+              if (currentItemContainer) currentItemContainer.innerHTML += "<p><em>Warning: Real-time updates may not work.</em></p>";
+          }
+        } else {
+            if (currentItemContainer) {
+                let errorMsg = "Initialization error: ";
+                if (!ZLFM) errorMsg += "Live Folder Manager not found. ";
+                if (!folderUuid) errorMsg += "Folder UUID missing from URL. ";
+                currentItemContainer.textContent = errorMsg;
+            }
+        }
+    });
+  </script>
+</head>
+<body>
+  <h1 id="folderHeader">Live Folder</h1>
+  <div id="itemContainer">
+    <p>Loading...</p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>GitHub Login for Live Folder</title>
+  <style>
+    body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+    input { margin-bottom: 10px; padding: 8px; }
+    button { padding: 10px 15px; }
+  </style>
+</head>
+<body>
+  <h1>Link GitHub Account for Live Folder</h1>
+  <p>Please enter your GitHub username. In a real implementation, this would be a GitHub OAuth flow.</p>
+  <input type="text" id="githubUsername" placeholder="GitHub Username">
+  <button id="submitUsername">Link Account</button>
+  <script>
+    document.getElementById('submitUsername').addEventListener('click', () => {
+      const username = document.getElementById('githubUsername').value;
+      if (username && window.opener && window.opener.gZenLiveFolderManager) {
+        // In a real scenario, postMessage would be more secure and robust
+        // For now, directly calling if possible or using a custom event.
+        // Let's use a custom event that the chrome script will listen for on the window.
+        // This is simpler than cross-origin postMessage for now as they are same-origin.
+        const event = new CustomEvent('zen-github-username-obtained', {
+          detail: { username: username },
+          bubbles: true,
+          composed: true
+        });
+        window.dispatchEvent(event); // Dispatch on the current window
+
+        // For now, we'll also try to notify the opener directly if in the same process,
+        // as message managers can be complex.
+         if (window.opener.gBrowser && window.opener.gBrowser.getTabForBrowser) {
+            let openerTab = null;
+            for (const win of Services.wm.getEnumerator('navigator:browser')) {
+                const browser = win.gBrowser.selectedBrowser;
+                if (browser.contentWindow === window.opener) {
+                     openerTab = win.gBrowser.selectedTab;
+                     break;
+                }
+            }
+            if(openerTab) {
+                openerTab.dispatchEvent(new CustomEvent('zen-github-username-obtained', {
+                    detail: { username: username }
+                }));
+            }
+        }
+        // A more robust method would be via messageManager to the parent process.
+        // Example: window.parent.postMessage({ type: 'githubUsername', username: username }, '*');
+
+        window.close(); // Close the tab after sending
+      } else {
+        if (!username) alert('Please enter a username.');
+        else alert('Could not communicate with the main window. Ensure this tab was opened by the Zen browser.');
+      }
+    });
+  </script>
+</body>
+</html>

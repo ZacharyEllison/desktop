@@ -1,12 +1,14 @@
-#
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-DIRS += [
-    "glance",
-    "livefolders",
-    "mods",
-    "tests",
-    "toolkit",
+JS_MODULES += [
+    "ZenLiveFolderManager.mjs",
+    "ZenLiveFolderStorage.mjs",
+]
+
+BROWSER_CHROME_FILES += [
+    "about_live_folder.xhtml",
+    "live-folder-styles.css",
+    "github_login.html",
 ]

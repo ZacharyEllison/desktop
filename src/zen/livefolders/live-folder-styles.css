@@ -1,0 +1,48 @@
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  margin: 0;
+  padding: 15px;
+  background-color: var(--lwt-accent-color, #f0f0f0); /* Example using LWT variable */
+  color: var(--lwt-text-color, #111); /* Example using LWT variable */
+}
+#folderHeader {
+  margin-top: 0;
+  font-size: 1.4em; /* Slightly smaller */
+  color: var(--lwt-tab-text-color, var(--lwt-text-color, #000)); /* Use tab text color or fallback */
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--lwt-toolbar-field-border-color, #ccc);
+  margin-bottom: 10px;
+}
+#itemContainer ul {
+    padding-left: 0;
+}
+.live-folder-item {
+  list-style: none;
+  padding: 10px 5px; /* Increased padding */
+  border-bottom: 1px solid var(--lwt-toolbar-field-border-color, #ddd); /* LWT variable */
+  display: flex;
+  align-items: center;
+  cursor: default;
+}
+.live-folder-item:last-child {
+  border-bottom: none;
+}
+.live-folder-item a {
+  text-decoration: none;
+  color: var(--lwt-toolbarbutton-icon-fill-attention, #0060df); /* LWT variable for links */
+  margin-left: 5px; /* Space between indicator and text */
+}
+.live-folder-item a:hover {
+  text-decoration: underline;
+}
+.status-indicator {
+  width: 8px; /* Smaller indicator */
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+.status-open { background-color: #28a745; } /* Bootstrap success green */
+.status-merged { background-color: #6f42c1; } /* Bootstrap purple */
+.status-closed { background-color: #dc3545; } /* Bootstrap danger red */
+.status-unknown { background-color: #6c757d; } /* Bootstrap secondary grey */

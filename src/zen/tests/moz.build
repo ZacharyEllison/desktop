@@ -10,3 +10,7 @@ BROWSER_CHROME_MANIFESTS += [
     "urlbar/browser.toml",
     "workspaces/browser.toml",
 ]
+
+DIRS += [
+    "livefolders",
+]

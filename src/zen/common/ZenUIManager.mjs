@@ -550,6 +550,7 @@ var gZenVerticalTabsManager = {
 
     gZenCompactModeManager.addEventListener(updateEvent);
     this.initRightSideOrderContextMenu();
+    this.initLiveFolderContextMenu();
 
     window.addEventListener('customizationstarting', this._preCustomize.bind(this));
     window.addEventListener('aftercustomization', this._postCustomize.bind(this));
@@ -1121,4 +1122,64 @@ var gZenVerticalTabsManager = {
 
     this._tabEdited = null;
   },
+
+  initLiveFolderContextMenu() {
+    const menuId = 'navigator-toolbox-menu'; // Primary target
+    const fallbackMenuId = 'tabContextMenu'; // Fallback target
+    let contextMenu = document.getElementById(menuId);
+
+    if (!contextMenu) {
+      contextMenu = document.getElementById(fallbackMenuId);
+    }
+
+    if (contextMenu && !document.getElementById('zen-toolbar-context-enable-github-live-folder')) {
+      const menuItem = document.createXULElement('menuitem');
+      menuItem.setAttribute('id', 'zen-toolbar-context-enable-github-live-folder');
+      // TODO: Replace with data-lazy-l10n-id for localization if this were a production feature.
+      menuItem.setAttribute('label', 'Enable GitHub PR Live Folder');
+      menuItem.setAttribute('command', 'cmd_zenEnableGitHubLiveFolder');
+
+      // Try to find a separator to insert before, or just append
+      const separator = contextMenu.querySelector('menuseparator');
+      if (separator) {
+        contextMenu.insertBefore(menuItem, separator);
+      } else {
+        contextMenu.appendChild(menuItem);
+      }
+    } else {
+      if (!contextMenu) {
+        console.warn('ZenUIManager: Could not find context menu (' + menuId + ' or ' + fallbackMenuId + ') to add Live Folder option.');
+      } else {
+        // Item might already exist, which is fine.
+      }
+    }
+  },
 };
+
+// Command handling for cmd_zenEnableGitHubLiveFolder
+// Attempt to hook into existing command infrastructure or add a listener.
+if (typeof window.goDoCommand !== 'undefined') {
+  const originalGoDoCommand = window.goDoCommand;
+  window.goDoCommand = function(aCommand) {
+    if (aCommand === 'cmd_zenEnableGitHubLiveFolder') {
+      gZenUIManager.openAndChangeToTab('chrome://browser/content/zen/livefolders/github_login.html', {
+        relatedToCurrent: false,
+        inBackground: false
+      });
+    } else {
+      originalGoDoCommand.apply(this, arguments);
+    }
+  };
+} else {
+  // Fallback if goDoCommand is not the mechanism, add a command event listener.
+  // This is a simplified approach. A more robust solution might involve <command> elements in XUL
+  // and ensuring this listener is correctly scoped and cleaned up.
+  document.addEventListener('command', function(event) {
+    if (event.target.getAttribute('command') === 'cmd_zenEnableGitHubLiveFolder' || event.command === 'cmd_zenEnableGitHubLiveFolder') {
+      gZenUIManager.openAndChangeToTab('chrome://browser/content/zen/livefolders/github_login.html', {
+        relatedToCurrent: false,
+        inBackground: false
+      });
+    }
+  });
+}
