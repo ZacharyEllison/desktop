@@ -12,7 +12,7 @@ var ZenLiveFolderStorage = {
   async _ensureTables() {
     await PlacesUtils.withConnectionWrapper('ZenLiveFolderStorage._ensureTables', async (db) => {
       // Create zen_live_folders table
-      await db.execute(\`
+      await db.execute(`
         CREATE TABLE IF NOT EXISTS zen_live_folders (
           uuid TEXT PRIMARY KEY,
           type TEXT NOT NULL, -- e.g., 'github_prs'
@@ -22,12 +22,16 @@ var ZenLiveFolderStorage = {
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
         )
-      \`);
-      await db.execute(\`CREATE INDEX IF NOT EXISTS idx_zen_live_folders_uuid ON zen_live_folders(uuid)\`);
-      await db.execute(\`CREATE INDEX IF NOT EXISTS idx_zen_live_folders_type ON zen_live_folders(type)\`);
+      `);
+      await db.execute(
+        `CREATE INDEX IF NOT EXISTS idx_zen_live_folders_uuid ON zen_live_folders(uuid)`
+      );
+      await db.execute(
+        `CREATE INDEX IF NOT EXISTS idx_zen_live_folders_type ON zen_live_folders(type)`
+      );
 
       // Create zen_live_folder_items table
-      await db.execute(\`
+      await db.execute(`
         CREATE TABLE IF NOT EXISTS zen_live_folder_items (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           folder_uuid TEXT NOT NULL,
@@ -41,18 +45,24 @@ var ZenLiveFolderStorage = {
           UNIQUE(folder_uuid, item_id),
           FOREIGN KEY (folder_uuid) REFERENCES zen_live_folders(uuid) ON DELETE CASCADE
         )
-      \`);
-      await db.execute(\`CREATE INDEX IF NOT EXISTS idx_zen_live_folder_items_folder_uuid ON zen_live_folder_items(folder_uuid)\`);
-      await db.execute(\`CREATE INDEX IF NOT EXISTS idx_zen_live_folder_items_item_id ON zen_live_folder_items(item_id)\`);
+      `);
+      await db.execute(
+        `CREATE INDEX IF NOT EXISTS idx_zen_live_folder_items_folder_uuid ON zen_live_folder_items(folder_uuid)`
+      );
+      await db.execute(
+        `CREATE INDEX IF NOT EXISTS idx_zen_live_folder_items_item_id ON zen_live_folder_items(item_id)`
+      );
 
       // Changes tracking table for live folders (optional, but good for sync)
-      await db.execute(\`
+      await db.execute(`
         CREATE TABLE IF NOT EXISTS zen_live_folders_changes (
           uuid TEXT PRIMARY KEY,
           timestamp INTEGER NOT NULL
         )
-      \`);
-      await db.execute(\`CREATE INDEX IF NOT EXISTS idx_zen_live_folders_changes_uuid ON zen_live_folders_changes(uuid)\`);
+      `);
+      await db.execute(
+        `CREATE INDEX IF NOT EXISTS idx_zen_live_folders_changes_uuid ON zen_live_folders_changes(uuid)`
+      );
     });
   },
 
@@ -60,7 +70,7 @@ var ZenLiveFolderStorage = {
     await PlacesUtils.withConnectionWrapper('ZenLiveFolderStorage.saveLiveFolder', async (db) => {
       const now = Date.now();
       await db.execute(
-        \`
+        `
         INSERT OR REPLACE INTO zen_live_folders (
           uuid, type, title, source_username, rss_feed_url, created_at, updated_at
         ) VALUES (
@@ -68,7 +78,7 @@ var ZenLiveFolderStorage = {
           COALESCE((SELECT created_at FROM zen_live_folders WHERE uuid = :uuid), :now),
           :now
         )
-      \`,
+      `,
         {
           uuid: folder.uuid,
           type: folder.type,
@@ -80,7 +90,7 @@ var ZenLiveFolderStorage = {
       );
       // Add to changes table if implementing sync
       await db.execute(
-        \`INSERT OR REPLACE INTO zen_live_folders_changes (uuid, timestamp) VALUES (:uuid, :timestamp)\`,
+        `INSERT OR REPLACE INTO zen_live_folders_changes (uuid, timestamp) VALUES (:uuid, :timestamp)`,
         { uuid: folder.uuid, timestamp: Math.floor(now / 1000) }
       );
     });
@@ -89,7 +99,7 @@ var ZenLiveFolderStorage = {
 
   async getLiveFolder(uuid) {
     const db = await PlacesUtils.promiseDBConnection();
-    const rows = await db.execute(\`SELECT * FROM zen_live_folders WHERE uuid = :uuid\`, { uuid });
+    const rows = await db.execute(`SELECT * FROM zen_live_folders WHERE uuid = :uuid`, { uuid });
     if (rows.length === 0) {
       return null;
     }
@@ -107,7 +117,7 @@ var ZenLiveFolderStorage = {
 
   async getAllLiveFolders() {
     const db = await PlacesUtils.promiseDBConnection();
-    const rows = await db.execute(\`SELECT * FROM zen_live_folders ORDER BY title ASC\`);
+    const rows = await db.execute(`SELECT * FROM zen_live_folders ORDER BY title ASC`);
     return rows.map((row) => ({
       uuid: row.getResultByName('uuid'),
       type: row.getResultByName('type'),
@@ -119,20 +129,22 @@ var ZenLiveFolderStorage = {
 
   async removeLiveFolder(uuid) {
     await PlacesUtils.withConnectionWrapper('ZenLiveFolderStorage.removeLiveFolder', async (db) => {
-      await db.execute(\`DELETE FROM zen_live_folders WHERE uuid = :uuid\`, { uuid });
+      await db.execute(`DELETE FROM zen_live_folders WHERE uuid = :uuid`, { uuid });
       // Also remove associated items
-      await db.execute(\`DELETE FROM zen_live_folder_items WHERE folder_uuid = :uuid\`, { uuid });
+      await db.execute(`DELETE FROM zen_live_folder_items WHERE folder_uuid = :uuid`, { uuid });
       // Remove from changes table
-      await db.execute(\`DELETE FROM zen_live_folders_changes WHERE uuid = :uuid\`, { uuid });
+      await db.execute(`DELETE FROM zen_live_folders_changes WHERE uuid = :uuid`, { uuid });
     });
     // Notify observers: Services.obs.notifyObservers(null, 'zen-live-folder-removed', uuid);
   },
 
   async saveLiveFolderItem(item) {
-    await PlacesUtils.withConnectionWrapper('ZenLiveFolderStorage.saveLiveFolderItem', async (db) => {
-      const now = Date.now();
-      await db.execute(
-        \`
+    await PlacesUtils.withConnectionWrapper(
+      'ZenLiveFolderStorage.saveLiveFolderItem',
+      async (db) => {
+        const now = Date.now();
+        await db.execute(
+          `
         INSERT OR REPLACE INTO zen_live_folder_items (
           folder_uuid, item_id, title, link, status, last_updated, created_at, updated_at
         ) VALUES (
@@ -140,24 +152,25 @@ var ZenLiveFolderStorage = {
           COALESCE((SELECT created_at FROM zen_live_folder_items WHERE folder_uuid = :folder_uuid AND item_id = :item_id), :now),
           :now
         )
-      \`,
-        {
-          folder_uuid: item.folder_uuid,
-          item_id: item.item_id,
-          title: item.title,
-          link: item.link,
-          status: item.status,
-          last_updated: item.last_updated,
-          now,
-        }
-      );
-    });
+      `,
+          {
+            folder_uuid: item.folder_uuid,
+            item_id: item.item_id,
+            title: item.title,
+            link: item.link,
+            status: item.status,
+            last_updated: item.last_updated,
+            now,
+          }
+        );
+      }
+    );
   },
 
   async getLiveFolderItems(folderUuid) {
     const db = await PlacesUtils.promiseDBConnection();
     const rows = await db.execute(
-      \`SELECT * FROM zen_live_folder_items WHERE folder_uuid = :folderUuid ORDER BY last_updated DESC\`,
+      `SELECT * FROM zen_live_folder_items WHERE folder_uuid = :folderUuid ORDER BY last_updated DESC`,
       { folderUuid }
     );
     return rows.map((row) => ({
@@ -172,10 +185,15 @@ var ZenLiveFolderStorage = {
   },
 
   async removeLiveFolderItems(folderUuid) {
-    await PlacesUtils.withConnectionWrapper('ZenLiveFolderStorage.removeLiveFolderItems', async (db) => {
-      await db.execute(\`DELETE FROM zen_live_folder_items WHERE folder_uuid = :folderUuid\`, { folderUuid });
-    });
-  }
+    await PlacesUtils.withConnectionWrapper(
+      'ZenLiveFolderStorage.removeLiveFolderItems',
+      async (db) => {
+        await db.execute(`DELETE FROM zen_live_folder_items WHERE folder_uuid = :folderUuid`, {
+          folderUuid,
+        });
+      }
+    );
+  },
 };
 
 ZenLiveFolderStorage.promiseInitialized = new Promise((resolve) => {
@@ -188,7 +206,9 @@ ZenLiveFolderStorage.promiseInitialized = new Promise((resolve) => {
     // If PlacesUtils is not available, wait for a global event or use a lazy loader.
     // For simplicity, we'll assume it becomes available.
     // In a real scenario, this needs careful handling of dependencies.
-    console.warn("PlacesUtils not immediately available for ZenLiveFolderStorage. Will try to initialize later.");
+    console.warn(
+      'PlacesUtils not immediately available for ZenLiveFolderStorage. Will try to initialize later.'
+    );
     // Fallback or error handling
   }
 });
