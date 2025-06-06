@@ -2,13 +2,13 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-JS_MODULES += [
+EXTRA_JS_MODULES += [
     "ZenLiveFolderManager.mjs",
     "ZenLiveFolderStorage.mjs",
 ]
 
-BROWSER_CHROME_FILES += [
+FINAL_TARGET_FILES += [
     "about_live_folder.xhtml",
-    "live-folder-styles.css",
     "github_login.html",
+    "live-folder-styles.css",
 ]
