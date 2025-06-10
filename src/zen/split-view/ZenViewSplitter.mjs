@@ -186,16 +186,31 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
    * @param {number} groupIndex - The index of the group.
    * @param {boolean} forUnsplit - Indicates if the tab is being removed for unsplitting.
    */
-  removeTabFromGroup(tab, groupIndex, forUnsplit) {
+  async removeTabFromGroup(tab, groupIndex, forUnsplit) {
+    const PinnedTabManager = gZenPinnedTabManager;
     const group = this._data[groupIndex];
+    if (!group) return;
+
     const tabIndex = group.tabs.indexOf(tab);
-    group.tabs.splice(tabIndex, 1);
+    if (tabIndex > -1) {
+      group.tabs.splice(tabIndex, 1);
+    }
+
+    const tabPinId = tab.getAttribute('zen-pin-id');
+    if (tabPinId) {
+      await PinnedTabManager.updatePinParent(tabPinId, null);
+    }
 
     this.resetTabState(tab, forUnsplit);
     if (tab.group && tab.group.hasAttribute('split-view-group')) {
       gBrowser.ungroupTab(tab);
     }
+
     if (group.tabs.length < 2) {
+      const groupPinUuid = group.groupPinUuid;
+      if (groupPinUuid) {
+        await PinnedTabManager.removeSplitGroupPin(groupPinUuid);
+      }
       // We need to remove all remaining tabs from the group when unsplitting
       let remainingTabs = [...group.tabs]; // Copy array since we'll modify it
       for (let remainingTab of remainingTabs) {
@@ -203,15 +218,29 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
           gBrowser.ungroupTab(remainingTab);
         }
         this.resetTabState(remainingTab, forUnsplit);
+        const remainingTabPinId = remainingTab.getAttribute('zen-pin-id');
+        if (remainingTabPinId) { // Also update parent for remaining tabs
+            await PinnedTabManager.updatePinParent(remainingTabPinId, null);
+        }
       }
-      this.removeGroup(groupIndex);
-      gBrowser.selectedTab = remainingTabs[remainingTabs.length - 1];
+      this.removeGroup(groupIndex); // This will also call deactivateCurrentSplitView if needed
+      if (remainingTabs.length > 0) {
+        gBrowser.selectedTab = remainingTabs[remainingTabs.length - 1];
+      } else if (gBrowser.tabs.length > 0 && !gBrowser.selectedTab.closing) {
+         // If no remaining tabs from the group, select the first available tab.
+         // Avoid selecting a tab that is in the process of closing.
+        gBrowser.selectedTab = gBrowser.tabs.find(t => !t.closing) || gBrowser.tabs[0];
+      }
+
+
     } else {
       const node = this.getSplitNodeFromTab(tab);
-      const toUpdate = this.removeNode(node);
-      this.applyGridLayout(toUpdate);
+      if (node) { // Ensure node exists before trying to remove
+        const toUpdate = this.removeNode(node);
+        this.applyGridLayout(toUpdate);
+      }
       // Select next tab if the removed tab was selected
-      if (gBrowser.selectedTab === tab) {
+      if (gBrowser.selectedTab === tab && group.tabs.length > 0) {
         gBrowser.selectedTab = group.tabs[0];
       }
     }
@@ -1032,48 +1061,62 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
    * @param {Tab[]} tabs - The tabs to split.
    * @param {string|undefined} gridType - The type of grid layout.
    */
-  splitTabs(tabs, gridType, initialIndex = 0) {
-    // TODO: Add support for splitting essential tabs
-    tabs = tabs.filter((t) => !t.hidden && !t.hasAttribute('zen-empty-tab'));
-    if (tabs.length < 2 || tabs.length > this.MAX_TABS) {
-      return;
+  async splitTabs(tabs, gridType, initialIndex = 0) {
+    if (this._sessionRestoring) {
+      // Existing logic for session restoring
+      tabs = tabs.filter((t) => !t.hidden && !t.hasAttribute('zen-empty-tab'));
+      if (tabs.length < 2 || tabs.length > this.MAX_TABS) {
+        return;
+      }
     }
 
-    const existingSplitTab = tabs.find((tab) => tab.splitView);
-    if (existingSplitTab) {
-      this._moveTabsToContainer(tabs, tabs[initialIndex]);
-      const groupIndex = this._data.findIndex((group) => group.tabs.includes(existingSplitTab));
-      const group = this._data[groupIndex];
-      const gridTypeChange = gridType && group.gridType !== gridType;
-      const newTabsAdded = tabs.find((t) => !group.tabs.includes(t));
-      if (gridTypeChange || !newTabsAdded) {
-        // reset layout
-        group.gridType = gridType;
-        group.layoutTree = this.calculateLayoutTree(
-          [...new Set(group.tabs.concat(tabs))],
-          gridType
-        );
-      } else {
-        // Add any tabs that are not already in the group
-        for (let i = 0; i < tabs.length; i++) {
-          const tab = tabs[i];
-          if (!group.tabs.includes(tab)) {
-            gBrowser.moveTabToGroup(tab, this._getSplitViewGroup(tabs));
-            group.tabs.push(tab);
-            this.addTabToSplit(tab, group.layoutTree);
+    const PinnedTabManager = gZenPinnedTabManager;
+    let existingPersistentSplitGroup = null;
+    let groupPinUuidToUse = null;
+
+    for (const tab of tabs) {
+      if (tab.splitView && this._data[tab.splitViewValue]?.groupPinUuid) {
+        existingPersistentSplitGroup = this._data[tab.splitViewValue];
+        break;
+      }
+    }
+
+    if (existingPersistentSplitGroup) {
+      groupPinUuidToUse = existingPersistentSplitGroup.groupPinUuid;
+      const group = existingPersistentSplitGroup;
+
+      for (const tab of tabs) {
+        if (!group.tabs.includes(tab)) {
+          // Add to existing visual group first
+          gBrowser.moveTabToGroup(tab, this._getSplitViewGroup(tabs)); // Ensure it's in the visual group
+          group.tabs.push(tab);
+          this.addTabToSplit(tab, group.layoutTree); // Add to logical layout
+
+          const tabPinId = tab.getAttribute('zen-pin-id');
+          if (tabPinId) {
+            await PinnedTabManager.updatePinParent(tabPinId, groupPinUuidToUse);
           }
         }
       }
-      if (this._sessionRestoring) {
+      this.activateSplitView(group, true, true); // Pass isRestoring = true
+      return;
+    } else {
+      // Filter out hidden/empty tabs again carefully
+      tabs = tabs.filter((t) => !t.hidden && !t.hasAttribute('zen-empty-tab'));
+      if (tabs.length < 2 || tabs.length > this.MAX_TABS) {
         return;
       }
-      this.activateSplitView(group, true);
-      return;
+
+      const newSplitGroupPinUuid = await PinnedTabManager.createSplitGroupPin(tabs);
+      if (!newSplitGroupPinUuid) {
+        console.error("[ZenViewSplitter] Failed to create a persistent split group pin.");
+        // Optionally, proceed without persistence or return
+        // For now, let's proceed but log it.
+      }
+      groupPinUuidToUse = newSplitGroupPinUuid;
     }
 
-    // We are here if none of the tabs have been previously split
-    // If there's ANY pinned tab on the list, we clone the pinned tab
-    // state to all the tabs
+    // Common logic for new or existing (but not yet persistent) split
     const allArePinned = tabs.every((tab) => tab.pinned);
     const thereIsOnePinned = tabs.some((tab) => tab.pinned);
     const thereIsOneEssential = tabs.some((tab) => tab.hasAttribute('zen-essential'));
@@ -1093,13 +1136,14 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
       tabs,
       gridType,
       layoutTree: this.calculateLayoutTree(tabs, gridType),
+      groupPinUuid: groupPinUuidToUse, // Store the pin UUID
     };
     this._data.push(splitData);
+
     if (!this._sessionRestoring) {
       window.gBrowser.selectedTab = tabs[initialIndex] ?? tabs[0];
     }
 
-    // Add tabs to the split view group
     let splitGroup = this._getSplitViewGroup(tabs);
     if (splitGroup) {
       for (const tab of tabs) {
@@ -1112,7 +1156,7 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
     if (this._sessionRestoring) {
       return;
     }
-    this.activateSplitView(splitData);
+    this.activateSplitView(splitData, false, !!groupPinUuidToUse); // Pass isRestoring if groupPinUuidToUse is set
   }
 
   addTabToSplit(tab, splitNode, prepend = true) {
@@ -1131,12 +1175,18 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
     const newView = this._data.findIndex((group) => group.tabs.includes(tab));
 
     if (oldView === newView) return;
+
     if (newView < 0 && oldView >= 0) {
       this.deactivateCurrentSplitView();
       return;
     }
-    this.disableTabRearrangeView();
-    this.activateSplitView(this._data[newView]);
+
+    if (newView >=0 && this._data[newView]) {
+        this.disableTabRearrangeView();
+        // Check if activating due to pin restoration
+        const isRestoring = !!this._data[newView].groupPinUuid;
+        this.activateSplitView(this._data[newView], false, isRestoring);
+    }
   }
 
   /**
@@ -1144,10 +1194,15 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
    */
   deactivateCurrentSplitView() {
     if (this.currentView < 0) return;
-    this.setTabsDocShellState(this._data[this.currentView].tabs, false);
-    for (const tab of this._data[this.currentView].tabs) {
-      const container = tab.linkedBrowser.closest('.browserSidebarContainer');
-      this.resetContainerStyle(container);
+    const currentGroupData = this._data[this.currentView];
+    if (currentGroupData) {
+        this.setTabsDocShellState(currentGroupData.tabs, false);
+        for (const tab of currentGroupData.tabs) {
+            const container = tab.linkedBrowser?.closest('.browserSidebarContainer');
+            if (container) {
+                this.resetContainerStyle(container);
+            }
+        }
     }
     this.removeSplitters();
     this.tabBrowserPanel.removeAttribute('zen-split-view');
@@ -1156,17 +1211,28 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
     this.maybeDisableOpeningTabOnSplitView();
   }
 
+
   /**
    * Activates the split view.
    *
    * @param {object} splitData - The split data.
+   * @param {boolean} reset - Whether to reset splitters.
+   * @param {boolean} isRestoring - Whether this activation is part of a restoration process.
    */
-  activateSplitView(splitData, reset = false) {
+  activateSplitView(splitData, reset = false, isRestoring = false) {
     const oldView = this.currentView;
     const newView = this._data.indexOf(splitData);
-    if (oldView >= 0 && oldView !== newView) this.deactivateCurrentSplitView();
+
+    // If activating a different view, deactivate the current one first.
+    if (oldView >= 0 && oldView !== newView) {
+      this.deactivateCurrentSplitView();
+    }
     this.currentView = newView;
-    if (reset) this.removeSplitters();
+
+    if (reset) {
+      this.removeSplitters();
+    }
+
     splitData.tabs.forEach((tab) => {
       if (tab.hasAttribute('pending')) {
         gBrowser.getBrowserForTab(tab).reload();
@@ -1174,11 +1240,20 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
     });
 
     this.tabBrowserPanel.setAttribute('zen-split-view', 'true');
-
     this.applyGridToTabs(splitData.tabs);
     this.applyGridLayout(splitData.layoutTree);
     this.setTabsDocShellState(splitData.tabs, true);
     this.toggleWrapperDisplay(true);
+
+    // Persistence logic, skipped if isRestoring is true
+    if (!isRestoring && !splitData.groupPinUuid) {
+      // This implies it's a new split view being activated that isn't from pins.
+      // However, splitTabs should handle creation now.
+      // This might be redundant or for edge cases like manual API calls to activateSplitView.
+      // Consider if PinnedTabManager.createSplitGroupPin should be called here
+      // if splitData.groupPinUuid is missing, but this might lead to double-creation.
+      // For now, assuming splitTabs handles the creation.
+    }
   }
 
   calculateLayoutTree(tabs, gridType) {
@@ -1216,13 +1291,15 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
       tab.splitView = true;
       tab.splitViewValue = this.currentView;
       tab.setAttribute('split-view', 'true');
+      tab.setAttribute('zen-split-tab-member', 'true'); // Add member attribute
       const container = tab.linkedBrowser?.closest('.browserSidebarContainer');
-      if (!container?.querySelector('.zen-tab-rearrange-button')) {
-        // insert a header into the container
-        const header = this._createHeader(container);
-        container.insertBefore(header, container.firstChild);
+      if (container) { // Ensure container exists
+        if (!container.querySelector('.zen-tab-rearrange-button')) {
+          const header = this._createHeader(container);
+          container.insertBefore(header, container.firstChild);
+        }
+        this.styleContainer(container);
       }
-      this.styleContainer(container);
     });
   }
 
@@ -1237,6 +1314,11 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
     headerContainer.classList.add('zen-view-splitter-header-container');
     const header = document.createElement('div');
     header.classList.add('zen-view-splitter-header');
+
+    const splitIcon = document.createXULElement('image');
+    splitIcon.setAttribute('class', 'zen-tab-split-icon');
+    header.prepend(splitIcon); // Prepend icon
+
     const removeButton = document.createXULElement('toolbarbutton');
     removeButton.classList.add('zen-tab-unsplit-button');
     removeButton.addEventListener('click', () => {
@@ -1378,6 +1460,7 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
    */
   styleContainer(container) {
     container.addEventListener('mousedown', this.handleTabEvent);
+    container.setAttribute('role', 'tabpanel'); // Add ARIA role
   }
 
   /**
@@ -1395,8 +1478,20 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
     );
     if (tab) {
       window.gBrowser.selectedTab = tab;
+      // Update ARIA states for all tabs in this split group
+      const groupData = this._data.find(g => g.tabs.includes(tab));
+      if (groupData) {
+        for (const t of groupData.tabs) {
+          const tContainer = t.linkedBrowser?.closest('.browserSidebarContainer');
+          if (tContainer) {
+            tContainer.setAttribute('aria-selected', t === tab ? 'true' : 'false');
+          }
+        }
+      }
     }
   };
+  // TODO: Implement more specific keyboard navigation (e.g. arrow keys) if needed.
+  // Current navigation relies on default browser focus mechanisms and Tab/Shift+Tab.
 
   handleSplitterMouseDown = (event) => {
     this.tabBrowserPanel.setAttribute('zen-split-resizing', true);
@@ -1499,6 +1594,9 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
    */
   resetContainerStyle(container) {
     container.removeAttribute('zen-split');
+    container.removeAttribute('zen-split-tab-member'); // Clean up attribute
+    container.removeAttribute('role'); // Clean up ARIA role
+    container.removeAttribute('aria-selected'); // Clean up ARIA state
     container.style.inset = '';
   }
 
@@ -1520,11 +1618,43 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
   /**
    * @description unsplit the current view.]
    */
-  unsplitCurrentView() {
+  async unsplitCurrentView() {
     if (this.currentView < 0) return;
-    this.removeGroup(this.currentView);
-    const currentTab = window.gBrowser.selectedTab;
-    window.gBrowser.selectedTab = currentTab;
+
+    const PinnedTabManager = gZenPinnedTabManager;
+    const group = this._data[this.currentView];
+
+    if (group && group.groupPinUuid) {
+      const groupPinUuid = group.groupPinUuid;
+      const tabsInGroup = [...group.tabs]; // Copy before group is modified/removed
+
+      await PinnedTabManager.removeSplitGroupPin(groupPinUuid);
+
+      for (const tab of tabsInGroup) {
+        const tabPinId = tab.getAttribute('zen-pin-id');
+        if (tabPinId) {
+          await PinnedTabManager.updatePinParent(tabPinId, null);
+        }
+      }
+    }
+
+    const currentSelectedTabBeforeUnsplit = window.gBrowser.selectedTab;
+    const tabsThatWereInGroup = group ? [...group.tabs] : [];
+
+    this.removeGroup(this.currentView); // This will also deactivate the current view and reset tab states
+
+    // Try to re-select a sensible tab.
+    if (tabsThatWereInGroup.includes(currentSelectedTabBeforeUnsplit) && !currentSelectedTabBeforeUnsplit.closing) {
+        window.gBrowser.selectedTab = currentSelectedTabBeforeUnsplit;
+    } else if (tabsThatWereInGroup.length > 0) {
+        const firstValidTab = tabsThatWereInGroup.find(t => !t.closing);
+        if (firstValidTab) window.gBrowser.selectedTab = firstValidTab;
+        else if (gBrowser.tabs.length > 0) window.gBrowser.selectedTab = gBrowser.tabs.find(t => !t.closing) || gBrowser.tabs[0];
+    } else if (gBrowser.tabs.length > 0) {
+        window.gBrowser.selectedTab = gBrowser.tabs.find(t => !t.closing) || gBrowser.tabs[0];
+    }
+    // Ensure UI reflects the correct selection if it changed.
+    if(gBrowser.selectedTab) gBrowser._selectedTabObserver.notify(null);
   }
 
   /**
@@ -1611,7 +1741,8 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
    * @param draggedTab - The dragged tab
    * @returns {boolean} true if the tab was moved to the split view
    */
-  moveTabToSplitView(event, draggedTab) {
+  async moveTabToSplitView(event, draggedTab) {
+    const PinnedTabManager = gZenPinnedTabManager;
     const canDrop = this._canDrop;
     this._canDrop = false;
 
@@ -1620,7 +1751,7 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
       return false;
     }
 
-    // CHeck if it's inside the tabbox
+    // Check if it's inside the tabbox
     const tabboxRect = gBrowser.tabbox.getBoundingClientRect();
     const elementSeparation = ZenThemeModifier.elementSeparation;
     if (
@@ -1651,95 +1782,75 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
       return false;
     }
 
-    gBrowser.selectedTab = this._draggingTab;
-    this._draggingTab = null;
+    // Ensure _draggingTab is set before trying to select it
+    if (this._draggingTab) {
+        gBrowser.selectedTab = this._draggingTab;
+    }
+
     const browserContainer = draggedTab.linkedBrowser?.closest('.browserSidebarContainer');
     if (browserContainer) {
       browserContainer.style.opacity = '0';
     }
 
     const droppedOnTab = gZenGlanceManager.getTabOrGlanceParent(gBrowser.getTabForBrowser(browser));
+    const draggedTabPinId = draggedTab.getAttribute('zen-pin-id');
+
     if (droppedOnTab && droppedOnTab !== draggedTab) {
-      // Calculate which side of the target browser the drop occurred
-      // const browserRect = browser.getBoundingClientRect();
-      // const hoverSide = this.calculateHoverSide(event.clientX, event.clientY, browserRect);
-      const hoverSide = dropSide;
+      const hoverSide = dropSide; // Simplified, assuming dropSide is accurate enough
 
       if (droppedOnTab.splitView) {
         // Add to existing split view
         const groupIndex = this._data.findIndex((group) => group.tabs.includes(droppedOnTab));
         const group = this._data[groupIndex];
+        const targetGroupPinUuid = group.groupPinUuid;
 
         if (!group.tabs.includes(draggedTab) && group.tabs.length < this.MAX_TABS) {
-          // First move the tab to the split view group
-          let splitGroup = droppedOnTab.group;
-          if (splitGroup && (!draggedTab.group || draggedTab.group !== splitGroup)) {
+          let splitGroupVisual = droppedOnTab.group;
+          if (splitGroupVisual && (!draggedTab.group || draggedTab.group !== splitGroupVisual)) {
             this._moveTabsToContainer([draggedTab], droppedOnTab);
-            gBrowser.moveTabToGroup(draggedTab, splitGroup);
-            if (hoverSide === 'left' || hoverSide === 'top') {
-              try {
-                splitGroup.tabs[0].before(draggedTab);
-              } catch (e) {
-                console.warn(
-                  `Failed to move tab ${draggedTab.id} before ${splitGroup.tabs[0].id}: ${e}`
-                );
-              }
-            }
+            gBrowser.moveTabToGroup(draggedTab, splitGroupVisual);
+            // Positional logic within visual group might need refinement
           }
 
           const droppedOnSplitNode = this.getSplitNodeFromTab(droppedOnTab);
           const parentNode = droppedOnSplitNode.parent;
-
-          // Then add the tab to the split view
           group.tabs.push(draggedTab);
 
-          // If dropping on a side, create a new split in that direction
-          if (hoverSide !== 'center') {
+          if (hoverSide !== 'center') { // Assuming 'center' means merge/replace, not side-split
             const splitDirection = hoverSide === 'left' || hoverSide === 'right' ? 'row' : 'column';
             if (parentNode.direction !== splitDirection) {
-              this.splitIntoNode(
-                droppedOnSplitNode,
-                new SplitLeafNode(draggedTab, 50),
-                hoverSide,
-                0.5
-              );
+              this.splitIntoNode(droppedOnSplitNode, new SplitLeafNode(draggedTab, 50), hoverSide, 0.5);
             } else {
-              this.addTabToSplit(
-                draggedTab,
-                parentNode,
-                /* prepend = */ hoverSide === 'left' || hoverSide === 'top'
-              );
+              this.addTabToSplit(draggedTab, parentNode, hoverSide === 'left' || hoverSide === 'top');
             }
           } else {
             this.addTabToSplit(draggedTab, group.layoutTree);
           }
 
-          this.activateSplitView(group, true);
+          if (draggedTabPinId && targetGroupPinUuid) {
+            await PinnedTabManager.updatePinParent(draggedTabPinId, targetGroupPinUuid);
+          }
+          this.activateSplitView(group, true, !!targetGroupPinUuid); // Pass isRestoring if target group is pinned
         }
       } else {
-        // Create new split view with layout based on drop position
-        let gridType = 'vsep';
-        //switch (hoverSide) {
-        //  case 'left':
-        //  case 'right':
-        //    gridType = 'vsep';
-        //    break;
-        //  case 'top':
-        //  case 'bottom':
-        //    gridType = 'hsep';
-        //    break;
-        //  default:
-        //    gridType = 'grid';
-        //}
-
-        // Put tabs always as if it was dropped from the left
-        this.splitTabs(
-          dropSide == 'left' ? [draggedTab, droppedOnTab] : [droppedOnTab, draggedTab],
-          gridType,
-          1
-        );
+        // Create new split view
+        // Persist new group, then update children.
+        // splitTabs now handles pin creation for the new group and its initial tabs.
+        const tabsForNewSplit = dropSide === 'left' ? [draggedTab, droppedOnTab] : [droppedOnTab, draggedTab];
+        await this.splitTabs(tabsForNewSplit, 'vsep', 1); // splitTabs is async
+        // Note: splitTabs internally calls activateSplitView.
+        // Pinning logic for draggedTab (if it was pre-existing) is handled by createSplitGroupPin.
       }
+    } else if (draggedTabPinId) {
+        // This case implies dragging out of a split or a standalone tab being moved.
+        // If it was part of a split and now isn't, its parent should be null.
+        const currentGroupData = this._data.find(d => d.tabs.includes(draggedTab));
+        if (!currentGroupData && draggedTab.getAttribute('zen-pin-id')) { // No longer in any split group
+             await PinnedTabManager.updatePinParent(draggedTabPinId, null);
+        }
     }
+
+
     if (this._finishAllAnimatingPromise) {
       this._finishAllAnimatingPromise.then(() => {
         this._maybeRemoveFakeBrowser(false);
@@ -1748,10 +1859,11 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
 
     if (browserContainer) {
       this.animateBrowserDrop(browserContainer, () => {
-        this._maybeRemoveFakeBrowser(false);
+        this._maybeRemoveFakeBrowser(false); // Ensure this is safe if called multiple times
         this._finishAllAnimatingPromise = null;
       });
     }
+    this._draggingTab = null; // Clear at the end
     return true;
   }
 
@@ -1806,33 +1918,41 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
    * @returns {TabGroup} The tab group for split view tabs
    */
   _getSplitViewGroup(tabs) {
+    if (!tabs || tabs.length === 0) return null;
     if (tabs.some((tab) => tab.hasAttribute('zen-essential'))) {
       return null;
     }
 
-    // Try to find an existing split view group
-    let splitGroup = gBrowser.tabGroups.find(
-      (group) =>
+    // Try to find an existing split view group that contains any of the target tabs
+    let splitGroup = gBrowser.tabGroups.find(group =>
         group.getAttribute('split-view-group') &&
-        group.tabs.some((tab) => tabs.includes(tab) && tab.splitView)
+        tabs.some(tab => group.tabs.includes(tab) && tab.splitView)
     );
+
 
     if (splitGroup) {
       return splitGroup;
     }
 
-    // We can't create an empty group, so only create if we have tabs
-    if (tabs?.length) {
-      // Create a new group with the initial tabs
-      const group = gBrowser.addTabGroup(tabs, {
-        label: '',
-        showCreateUI: false,
-        insertBefore: tabs[0],
-        forSplitView: true,
-      });
+    // If no existing group, create a new one if there are tabs to group
+    if (tabs.length > 0) {
+      // Ensure tabs are valid and in the DOM before grouping
+      const validTabsForGrouping = tabs.filter(t => t && t.parentNode && !t.closing);
+      if (validTabsForGrouping.length > 0) {
+        splitGroup = gBrowser.addTabGroup(validTabsForGrouping, {
+            label: '', // Split groups usually don't have a visible label by default
+            showCreateUI: false,
+            insertBefore: validTabsForGrouping[0], // Sensible default
+            forSplitView: true, // Custom attribute to identify these groups
+        });
+        // The 'split-view-group' attribute is often set by addTabGroup or manually after
+        // Ensure it's set if your addTabGroup doesn't do it automatically for forSplitView:true
+        if (splitGroup && !splitGroup.hasAttribute('split-view-group')) {
+            splitGroup.setAttribute('split-view-group', 'true');
+        }
+      }
     }
-
-    return null;
+    return splitGroup;
   }
 
   storeDataForSessionStore() {
@@ -1894,6 +2014,124 @@ class ZenViewSplitter extends ZenDOMOperatedFeature {
     }
     return true;
   }
+
+  initiateSplitFromContextMenu(tab) {
+    if (!tab || tab.splitView || this._data.some(group => group.tabs.includes(tab))) {
+      console.warn('[ZenViewSplitter] Tab is already split or invalid for new split initiation.');
+      return;
+    }
+
+    // For now, using the simplified toast + event listener approach
+    this._waitingForSecondTabToSplit = tab;
+    window.addEventListener('TabSelect', this.handleSecondTabSelectionForSplit.bind(this), { once: true });
+    // TODO: Add L10N ID
+    gZenUIManager.showToast({ message: 'Please select another tab to split with.', titleKey: 'zen-split-view-select-second-tab' });
+  }
+
+  handleSecondTabSelectionForSplit(event) {
+    const secondTab = event.target;
+    const firstTab = this._waitingForSecondTabToSplit;
+
+    delete this._waitingForSecondTabToSplit;
+    // Note: The listener is already { once: true }, so no explicit removeEventListener needed here if it fired.
+    // However, if this handler could be called externally or if cancellation is possible before selection,
+    // then explicit removal would be needed. For now, assuming it's only via the 'once' event.
+
+    if (firstTab && secondTab && firstTab !== secondTab && !secondTab.splitView && this.canSplitTabs([firstTab, secondTab])) {
+      this.splitTabs([firstTab, secondTab]); // Defaults to vertical or grid based on splitTabs logic
+    } else {
+      // TODO: Add L10N ID
+      gZenUIManager.showToast({ message: 'Tab splitting cancelled or second tab is invalid.', titleKey: 'zen-split-view-cancelled' });
+    }
+  }
+
+  canSplitTabs(tabs) {
+    if (!tabs || tabs.length === 0) return false;
+
+    if (tabs.length === 1) {
+      const tab = tabs[0];
+      // Check if the tab itself is valid for initiating a split
+      // and if there's "room" if it were to join an existing split or form a new one.
+      const canInitiate = !tab.splitView && !tab.hasAttribute('zen-empty-tab') && !tab.hidden &&
+                         !this._data.some(group => group.tabs.includes(tab));
+      if (!canInitiate) return false;
+
+      // If there's an active split view, can this tab be added to it?
+      if (this.splitViewActive && this._data[this.currentView]) {
+        return this._data[this.currentView].tabs.length < this.MAX_TABS;
+      }
+      // If no active split view, or if the active one is full,
+      // this tab would form a new split view (with another tab to be selected).
+      // This is permissible if we haven't hit a global max number of split views (if any such limit exists).
+      // For now, assume it's okay to initiate a new split if the tab itself is valid.
+      return true;
+    }
+
+    if (tabs.length >= 2 && tabs.length <= this.MAX_TABS) {
+      // Check if all tabs are valid for forming a new split group
+      return !tabs.some(t => t.splitView || t.hasAttribute('zen-empty-tab') || t.hidden ||
+                             this._data.some(group => group.tabs.includes(t)));
+    }
+    return false;
+  }
 }
+
+  restoreSplitViewFromPins(groupPin, childTabObjects) {
+    const tabs = childTabObjects.filter(t => t && t.parentNode && !t.closing); // Ensure tabs are valid, in DOM and not closing
+    if (tabs.length === 0) {
+      // Potentially remove the groupPin if it has no valid tabs?
+      // console.warn(`[ZenViewSplitter] No valid tabs found for split group ${groupPin.uuid}. Skipping restoration.`);
+      // await gZenPinnedTabManager.removeSplitGroupPin(groupPin.uuid); // Consider implications
+      return;
+    }
+
+    // Determine gridType. Default or from pin if stored later.
+    const gridType = groupPin.gridType || (tabs.length === 2 ? 'vsep' : 'grid'); // gridType could be stored on groupPin
+
+    const splitData = {
+      tabs,
+      gridType,
+      layoutTree: this.calculateLayoutTree(tabs, gridType),
+      groupPinUuid: groupPin.uuid, // Crucially, associate with the pin
+    };
+
+    this._data.push(splitData);
+    const newViewIndex = this._data.length - 1;
+
+    for (const tab of tabs) {
+      tab.splitView = true;
+      tab.splitViewValue = newViewIndex;
+      tab.setAttribute('split-view', 'true');
+      tab.setAttribute('zen-split-tab-member', 'true'); // Add member attribute during restoration
+
+      let visualGroup = this._getSplitViewGroup(tabs);
+      if (visualGroup && (!tab.group || tab.group !== visualGroup)) {
+          // Check if tab is already in another group, might need ungrouping first
+          if (tab.group && tab.group !== visualGroup) {
+              gBrowser.ungroupTab(tab);
+          }
+          gBrowser.moveTabToGroup(tab, visualGroup);
+      } else if (!visualGroup && tabs.length > 0) {
+          // If no visual group exists yet and we have tabs, create one.
+          // This might happen if tabs were not previously in any group.
+          visualGroup = gBrowser.addTabGroup(tabs, { forSplitView: true });
+          if (visualGroup && !visualGroup.hasAttribute('split-view-group')) {
+            visualGroup.setAttribute('split-view-group', 'true');
+          }
+      }
+      // Ensure ARIA attributes are set during restoration as well
+      const container = tab.linkedBrowser?.closest('.browserSidebarContainer');
+      if (container) {
+        container.setAttribute('role', 'tabpanel');
+        // Initial selection state might need to be determined by which tab is active in the workspace
+        // For now, defaulting to false, actual selection will trigger _handleTabEvent
+        container.setAttribute('aria-selected', 'false');
+      }
+    }
+    // The actual activation (making browsers visible and interactive)
+    // should happen when the user switches to a tab within this restored split view,
+    // or if it's the currently selected workspace/view upon startup.
+    // updateSplitView -> activateSplitView(..., ..., isRestoring=true) handles this.
+  }
 
 window.gZenViewSplitter = new ZenViewSplitter();

@@ -221,3 +221,70 @@
     transition-delay: 0s;
   }
 }
+
+/* Added styles for vertical tab splitting UI elements */
+
+/* 1. Split Tab Member Styling */
+.browserSidebarContainer[zen-split='true'][role='tabpanel'] {
+  /* Example: Add a subtle border or background change */
+  border: 1px solid var(--zen-border-color, rgba(0,0,0,0.1));
+  box-sizing: border-box; /* Ensure border doesn't increase size */
+}
+
+/* Style for the tab element itself - assuming zen-split-tab-member is on the <tab> XUL element */
+/* This might be better in zen-tabs.css if it needs to override general tab styles */
+tab[zen-split-tab-member="true"] {
+  /* Example: change background or add an indicator */
+  /* background-color: var(--zen-sidebar-background-color-alt, whitesmoke); */
+  /* Consider adding a small visual marker via ::before or ::after if needed */
+}
+
+/* 2. Focused/Selected Split Tab Styling */
+.browserSidebarContainer[zen-split='true'][role='tabpanel'][aria-selected="true"] {
+  border-color: var(--zen-identity-color-blue-50, Highlight) !important; /* Ensure this overrides the general border */
+  box-shadow: 0 0 3px var(--zen-identity-color-blue-50, Highlight);
+  /* Make sure this doesn't conflict with .deck-selected outline if both apply */
+  outline: 1px solid var(--zen-identity-color-blue-50, Highlight) !important; /* Override existing outline */
+}
+
+/* 3. Split Icon Styling */
+.zen-tab-split-icon {
+  width: 16px;
+  height: 16px;
+  background-image: url("data:image/svg+xml;charset=UTF8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23808080'%3E%3Cpath d='M7 2v12H5V2h2zm4 0v12H9V2h2z'/%3E%3C/svg%3E"); /* Simple placeholder icon */
+  background-repeat: no-repeat;
+  background-position: center;
+  margin-right: 4px; /* Space between icon and other header items */
+  opacity: 0.7;
+}
+
+.zen-view-splitter-header:hover .zen-tab-split-icon {
+  opacity: 1;
+}
+
+/* 4. Splitter/Divider Styling (Enhancements/Adjustments) */
+.zen-split-view-splitter {
+  background-color: var(--zen-border-color, rgba(0,0,0,0.2));
+  z-index: 100; /* Ensure it's above the browser content */
+  pointer-events: auto;
+}
+
+.zen-split-view-splitter[orient="vertical"] {
+  width: 5px; /* Width of the vertical divider */
+  cursor: ew-resize;
+  /* Adjust margins if the visual part should be thinner than the hit area */
+  /* margin-left: -2px; */
+  /* margin-right: -3px; */
+}
+
+.zen-split-view-splitter[orient="horizontal"] {
+  /* height is already set by --zen-split-column-gap, but can be overridden if needed */
+  /* height: 5px; */
+  cursor: ns-resize;
+  /* margin-top: -2px; */
+  /* margin-bottom: -3px; */
+}
+
+.zen-split-view-splitter:hover {
+  background-color: var(--zen-identity-color-blue-50, Highlight);
+}

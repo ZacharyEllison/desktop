@@ -1,4 +1,3 @@
-
 ["browser_pinned_unload_changed.js"]
 ["browser_pinned_unload_noreset.js"]
 ["browser_pinned_nounload_reset.js"]
@@ -12,6 +11,7 @@
 ["browser_pinned_reorder_changed_label.js"]
 ["browser_pinned_reordered.js"]
 ["browser_pinned_to_essential.js"]
+["test_zen_split_tab_groups.mjs"]
 
 ["browser_private_mode_no_essentials.js"]
 ["browser_private_mode_no_ctx_menu.js"]
