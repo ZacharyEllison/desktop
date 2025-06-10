@@ -317,6 +317,21 @@
 
       gBrowser._updateTabBarForPinnedTabs();
       gZenUIManager.updateTabsToolbar();
+
+      const splitGroupsData = [];
+      for (const pin of this._pinsCache) {
+        if (pin.isGroup && pin.splitGroup) {
+          const childTabPins = this._pinsCache.filter(p => p.parentUuid === pin.uuid);
+          const childTabObjects = childTabPins.map(childPin => gBrowser.tabs.find(t => t.getAttribute('zen-pin-id') === childPin.uuid)).filter(t => t);
+          if (childTabObjects.length > 0) {
+            splitGroupsData.push({ groupPin: pin, childTabObjects: childTabObjects });
+          }
+        }
+      }
+
+      for (const splitData of splitGroupsData) {
+        gZenViewSplitter.restoreSplitViewFromPins(splitData.groupPin, splitData.childTabObjects);
+      }
     }
 
     _onPinnedTabEvent(action, event) {
@@ -758,6 +773,24 @@
         `);
 
       document.getElementById('context_pinTab')?.before(element);
+
+      const splitTabMenuItem = window.MozXULElement.parseXULToFragment(`
+          <menuitem id="context_zen_splitTabVertically"
+                    label="Split Tab Vertically"
+                    data-l10n-id="tab-context-menu-split-vertically"
+                    hidden="true"
+                    command="cmd_zenSplitTabVertically"/>
+        `);
+      document.getElementById('context_pinTab')?.before(splitTabMenuItem);
+
+      const unsplitTabGroupMenuItem = window.MozXULElement.parseXULToFragment(`
+          <menuitem id="context_zen_unsplitTabGroup"
+                    label="Unsplit Tab Group"
+                    data-l10n-id="tab-context-menu-unsplit-group"
+                    hidden="true"
+                    command="cmd_zenUnsplitTabGroup"/>
+        `);
+      document.getElementById('context_zen_splitTabVertically')?.after(unsplitTabGroupMenuItem);
     }
 
     updatePinnedTabContextMenu(contextTab) {
@@ -786,6 +819,32 @@
         document.getElementById('context_unpinSelectedTabs').hidden ||
         contextTab.getAttribute('zen-essential');
       document.getElementById('context_zen-pinned-tab-separator').hidden = !isVisible;
+
+      let splitTabItem = document.getElementById("context_zen_splitTabVertically");
+      if (splitTabItem) {
+        const canSplit = gZenViewSplitter.canSplitTabs([contextTab]);
+        splitTabItem.hidden = contextTab.multiselected || !canSplit || contextTab.hasAttribute('zen-empty-tab') || contextTab.splitView;
+      }
+
+      let unsplitTabGroupItem = document.getElementById("context_zen_unsplitTabGroup");
+      if (unsplitTabGroupItem) {
+        const isPartOfSplit = contextTab.splitView && contextTab.group?.hasAttribute('split-view-group');
+        unsplitTabGroupItem.hidden = !isPartOfSplit;
+      }
+    }
+
+    handleSplitTabVerticallyCommand(event) {
+      const tab = TabContextMenu.contextTab;
+      if (tab && gZenViewSplitter) {
+        gZenViewSplitter.initiateSplitFromContextMenu(tab);
+      }
+    }
+
+    handleUnsplitTabGroupCommand(event) {
+      const tab = TabContextMenu.contextTab;
+      if (tab && tab.splitView && tab.group?.hasAttribute('split-view-group') && gZenViewSplitter) {
+        gZenViewSplitter.unsplitCurrentView();
+      }
     }
 
     moveToAnotherTabContainerIfNecessary(event, movingTabs) {
@@ -1106,6 +1165,61 @@
         await this.replacePinnedUrlWithCurrent(tab);
       }
     }
+  }
+
+  async createSplitGroupPin(tabsToGroup, groupTitle = 'Split Group') {
+    const groupUuid = gZenUIManager.generateUuidv4();
+    const workspaceUuid = tabsToGroup[0]?.getAttribute('zen-workspace-id') || gZenWorkspaces.getActiveWorkspaceFromCache().uuid;
+    const groupPinData = { uuid: groupUuid, title: groupTitle, is_group: true, split_group: true, isEssential: false, workspaceUuid: workspaceUuid, parentUuid: null };
+    await ZenPinnedTabsStorage.savePin(groupPinData);
+
+    for (const tab of tabsToGroup) {
+      let tabPinId = tab.getAttribute('zen-pin-id');
+      if (!tabPinId) {
+        await this._setPinnedAttributes(tab);
+        tabPinId = tab.getAttribute('zen-pin-id');
+        if (!tabPinId) {
+          console.error(`[ZenPinnedTabManager] Failed to create or retrieve pin ID for tab: ${tab.label}`);
+          continue;
+        }
+      }
+
+      const tabPinData = this._pinsCache.find(p => p.uuid === tabPinId);
+      if (tabPinData) {
+        tabPinData.parentUuid = groupUuid;
+        tabPinData.workspaceUuid = null; // Part of a group, workspace is on the group
+        await this.savePin(tabPinData);
+      } else {
+        console.error(`[ZenPinnedTabManager] Pin data not found for tab ${tabPinId} after attempting to set attributes.`);
+      }
+    }
+
+    await this.refreshPinnedTabs();
+    return groupUuid;
+  }
+
+  async removeSplitGroupPin(groupPinUuid) {
+    await ZenPinnedTabsStorage.removePin(groupPinUuid);
+    await this.refreshPinnedTabs();
+  }
+
+  async updatePinParent(tabPinId, parentGroupPinUuid) {
+    const pin = this._pinsCache.find(p => p.uuid === tabPinId);
+    if (!pin) {
+      console.error(`[ZenPinnedTabManager] Cannot find pin with id ${tabPinId} in cache to update its parent.`);
+      return;
+    }
+
+    pin.parentUuid = parentGroupPinUuid;
+    if (parentGroupPinUuid) {
+      pin.workspaceUuid = null; // Belongs to a group, workspace is on the group
+    } else {
+      // Assign to active workspace if becoming a standalone pin
+      pin.workspaceUuid = gZenWorkspaces.getActiveWorkspaceFromCache().uuid;
+    }
+
+    await this.savePin(pin);
+    await this.refreshPinnedTabs(); // Ensure cache consistency
   }
 
   window.gZenPinnedTabManager = new ZenPinnedTabManager();

@@ -23,6 +23,7 @@ var ZenPinnedTabsStorage = {
       parent_uuid TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
+      split_group BOOLEAN NOT NULL DEFAULT 0,
       FOREIGN KEY (parent_uuid) REFERENCES zen_pins(uuid) ON DELETE SET NULL
           )
       `);
@@ -39,6 +40,9 @@ var ZenPinnedTabsStorage = {
 
       // Add edited_title column if it doesn't exist
       await addColumnIfNotExists('edited_title', 'BOOLEAN NOT NULL DEFAULT 0');
+
+      // Add split_group column if it doesn't exist
+      await addColumnIfNotExists('split_group', 'BOOLEAN NOT NULL DEFAULT 0');
 
       // Create indices
       await db.execute(`
@@ -109,11 +113,11 @@ var ZenPinnedTabsStorage = {
           `
           INSERT OR REPLACE INTO zen_pins (
             uuid, title, url, container_id, workspace_uuid, position,
-            is_essential, is_group, parent_uuid, edited_title, created_at, 
-            updated_at
+            is_essential, is_group, parent_uuid, edited_title, split_group,
+            created_at, updated_at
           ) VALUES (
             :uuid, :title, :url, :container_id, :workspace_uuid, :position,
-            :is_essential, :is_group, :parent_uuid, :edited_title,
+            :is_essential, :is_group, :parent_uuid, :edited_title, :split_group,
             COALESCE((SELECT created_at FROM zen_pins WHERE uuid = :uuid), :now),
             :now
           )
@@ -129,6 +133,7 @@ var ZenPinnedTabsStorage = {
             is_group: pin.isGroup || false,
             parent_uuid: pin.parentUuid || null,
             edited_title: pin.editedTitle || false,
+            split_group: pin.splitGroup || false,
             now,
           }
         );
@@ -171,6 +176,7 @@ var ZenPinnedTabsStorage = {
       isGroup: Boolean(row.getResultByName('is_group')),
       parentUuid: row.getResultByName('parent_uuid'),
       editedTitle: Boolean(row.getResultByName('edited_title')),
+      splitGroup: Boolean(row.getResultByName('split_group')),
     }));
   },
 
@@ -196,6 +202,7 @@ var ZenPinnedTabsStorage = {
       isGroup: Boolean(row.getResultByName('is_group')),
       parentUuid: row.getResultByName('parent_uuid'),
       editedTitle: Boolean(row.getResultByName('edited_title')),
+      splitGroup: Boolean(row.getResultByName('split_group')),
     }));
   },
 
